@@ -1,0 +1,18 @@
+[project]
+name = "bb-calc"
+version = "0.1.0"
+description = "Utilities for aggregating realized P&L from trade CSV exports"
+authors = [
+    { name = "BB Calc Team" }
+]
+requires-python = ">=3.10"
+readme = "README.md"
+license = { text = "MIT" }
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0.0"]
+
+[tool.pytest.ini_options]
+addopts = "-ra"
+testpaths = ["tests"]
+python_files = ["test_*.py"]
