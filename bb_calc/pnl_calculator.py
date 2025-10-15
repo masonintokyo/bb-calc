@@ -105,6 +105,12 @@ def load_trades(csv_path: Path, encoding: str = "utf-8") -> List[Trade]:
     -------
     list[Trade]
         A list of :class:`Trade` instances in the order they appear in the file.
+
+    Notes
+    -----
+    Some exports prepend metadata lines (e.g. ``"UID: 382647166"``) before the
+    actual header row.  These lines are automatically skipped when searching for
+    the header so the function can ingest such files without manual editing.
     """
 
     if not csv_path.exists():
@@ -113,12 +119,47 @@ def load_trades(csv_path: Path, encoding: str = "utf-8") -> List[Trade]:
     _LOGGER.debug("Loading trades from %s", csv_path)
 
     with csv_path.open("r", encoding=encoding, newline="") as handle:
-        reader = csv.DictReader(handle)
-        missing_columns = {key for key in _required_columns() if key not in reader.fieldnames}
-        if missing_columns:
-            raise ValueError(f"Missing required columns: {', '.join(sorted(missing_columns))}")
+        lines = list(handle)
 
-        return [_normalize_trade(row) for row in reader]
+    header_index = _find_header_index(lines)
+    reader = csv.DictReader(lines[header_index:])
+
+    if reader.fieldnames is None:  # pragma: no cover - csv module invariants
+        raise ValueError("CSV file is missing a header row")
+
+    reader.fieldnames = [_clean_header_cell(name) for name in reader.fieldnames]
+
+    missing_columns = {key for key in _required_columns() if key not in reader.fieldnames}
+    if missing_columns:
+        raise ValueError(f"Missing required columns: {', '.join(sorted(missing_columns))}")
+
+    return [_normalize_trade(row) for row in reader]
+
+
+def _clean_header_cell(value: str) -> str:
+    """Normalize header cell names for consistent column matching."""
+
+    return value.strip().lstrip("\ufeff")
+
+
+def _find_header_index(lines: List[str]) -> int:
+    """Locate the CSV header row within the provided file contents."""
+
+    required = _required_columns()
+
+    for index, raw_line in enumerate(lines):
+        try:
+            row = next(csv.reader([raw_line]))
+        except csv.Error:  # pragma: no cover - defensive branch
+            continue
+
+        cleaned_cells = {_clean_header_cell(cell) for cell in row if cell}
+        if required.issubset(cleaned_cells):
+            return index
+
+    raise ValueError(
+        "Unable to locate header row containing required columns in CSV file"
+    )
 
 
 def _required_columns() -> set[str]:
