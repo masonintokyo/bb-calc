@@ -40,6 +40,18 @@ class Trade:
     created_time: datetime
 
 
+@dataclass(frozen=True)
+class PnLSummary:
+    """Aggregated view of realized P&L over a period."""
+
+    total: Decimal
+    trade_count: int
+    start: Optional[datetime]
+    end: Optional[datetime]
+    earliest_fill: Optional[datetime]
+    latest_fill: Optional[datetime]
+
+
 def configure_logging(log_level: Optional[str] = None) -> None:
     """Configure module wide logging.
 
@@ -197,16 +209,48 @@ def calculate_realized_pnl(
     function validates that *start* is not after *end*.
     """
 
+    summary = summarize_realized_pnl(trades, start=start, end=end)
+    _LOGGER.debug(
+        "Calculated realized P&L",
+        extra={
+            "total": str(summary.total),
+            "start": summary.start,
+            "end": summary.end,
+            "trade_count": summary.trade_count,
+        },
+    )
+    return summary.total
+
+
+def summarize_realized_pnl(
+    trades: Iterable[Trade], start: Optional[datetime] = None, end: Optional[datetime] = None
+) -> PnLSummary:
+    """Compute aggregated statistics for realized P&L within an optional period."""
+
     if start and end and start > end:
         raise ValueError("start datetime must be earlier than or equal to end datetime")
 
     total = Decimal("0")
+    trade_count = 0
+    earliest: Optional[datetime] = None
+    latest: Optional[datetime] = None
+
     for trade in _filter_trades(trades, start, end):
         total += trade.realized_pnl
-    _LOGGER.debug(
-        "Calculated realized P&L", extra={"total": str(total), "start": start, "end": end}
+        trade_count += 1
+        if earliest is None or trade.filled_time < earliest:
+            earliest = trade.filled_time
+        if latest is None or trade.filled_time > latest:
+            latest = trade.filled_time
+
+    return PnLSummary(
+        total=total,
+        trade_count=trade_count,
+        start=start,
+        end=end,
+        earliest_fill=earliest,
+        latest_fill=latest,
     )
-    return total
 
 
 def _cli(argv: Optional[list[str]] = None) -> int:
@@ -241,9 +285,31 @@ def _cli(argv: Optional[list[str]] = None) -> int:
     end_dt = _parse_datetime(args.end, "--end") if args.end else None
 
     trades = load_trades(args.csv)
-    total = calculate_realized_pnl(trades, start=start_dt, end=end_dt)
-    print(total)
+    summary = summarize_realized_pnl(trades, start=start_dt, end=end_dt)
+    print(_format_summary(summary))
     return 0
+
+
+def _format_summary(summary: PnLSummary) -> str:
+    lines = ["Realized P&L Summary", "===================="]
+
+    def _line(label: str, value: str) -> str:
+        return f"{label:<20}: {value}"
+
+    lines.append(_line("Total realized P&L", str(summary.total)))
+    lines.append(_line("Trades considered", str(summary.trade_count)))
+    lines.append(_line("Filter start (UTC)", _format_datetime(summary.start)))
+    lines.append(_line("Filter end (UTC)", _format_datetime(summary.end)))
+    lines.append(_line("First fill (UTC)", _format_datetime(summary.earliest_fill)))
+    lines.append(_line("Last fill (UTC)", _format_datetime(summary.latest_fill)))
+
+    return "\n".join(lines)
+
+
+def _format_datetime(value: Optional[datetime]) -> str:
+    if value is None:
+        return "not specified"
+    return value.strftime("%Y-%m-%d %H:%M:%S")
 
 
 def main() -> None:
